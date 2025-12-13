@@ -1,12 +1,17 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { getServerEnv } from "./env";
 import * as schema from "./schema";
 
-const connectionString = process.env.POSTGRES_URL as string;
+// Use centralized environment validation
+const env = getServerEnv();
+const connectionString = env.POSTGRES_URL;
 
-if (!connectionString) {
-  throw new Error("POSTGRES_URL environment variable is not set");
-}
+// Configure connection with timeouts and pooling for production readiness
+const client = postgres(connectionString, {
+  max: 10, // maximum number of connections in the pool
+  idle_timeout: 20, // seconds before closing idle connections
+  connect_timeout: 10, // seconds for connection timeout
+});
 
-const client = postgres(connectionString);
 export const db = drizzle(client, { schema });
