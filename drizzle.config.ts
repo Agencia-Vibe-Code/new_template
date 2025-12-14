@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import { readFileSync } from "fs";
 import { defineConfig } from "drizzle-kit";
 
 // Load environment variables from .env.local (or .env)
@@ -14,16 +15,33 @@ const url = new URL(postgresUrl);
 const sslMode = url.searchParams.get("sslmode");
 url.searchParams.delete("sslmode");
 
-const dbCredentials: { url: string; ssl?: boolean | { rejectUnauthorized: boolean } } = {
+const dbCredentials: {
+  url: string;
+  ssl?: boolean | { rejectUnauthorized: boolean; ca?: string };
+} = {
   url: url.toString(),
 };
+
+const caPath = process.env.POSTGRES_CA_CERT_PATH || process.env.PGSSLROOTCERT;
+const caValue = process.env.POSTGRES_CA_CERT;
+const caFromDisk =
+  caPath && caPath.length > 0
+    ? (() => {
+        try {
+          return readFileSync(caPath, "utf8");
+        } catch {
+          return undefined;
+        }
+      })()
+    : undefined;
+const ca = caValue || caFromDisk;
 
 // Configure SSL based on environment and URL parameters
 if (sslMode === "require" || sslMode === "prefer" || process.env.NODE_ENV === "production") {
   // In production or when SSL is required, use proper SSL
   // In development with self-signed certs, allow them
-  dbCredentials.ssl = process.env.NODE_ENV === "production" 
-    ? true 
+  dbCredentials.ssl = ca
+    ? { rejectUnauthorized: true, ca }
     : { rejectUnauthorized: false };
 }
 

@@ -23,7 +23,7 @@ export async function POST() {
   const session = await auth.api.getSession({ headers: await headers() })
 
   if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 })
   }
 
   try {
@@ -54,9 +54,8 @@ export async function POST() {
   } catch (error) {
     console.error("[post-signin] Error resolving default org:", error)
     return NextResponse.json(
-      { error: "Failed to resolve default organization" },
+      { error: "Falha ao resolver organização padrão" },
       { status: 500 }
     )
   }
 }
-

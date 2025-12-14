@@ -9,7 +9,7 @@ export function SignOutButton() {
   const router = useRouter();
 
   if (isPending) {
-    return <Button disabled>Loading...</Button>;
+    return <Button disabled>Carregando...</Button>;
   }
 
   if (!session) {
@@ -25,7 +25,7 @@ export function SignOutButton() {
         router.refresh();
       }}
     >
-      Sign out
+      Sair
     </Button>
   );
 }

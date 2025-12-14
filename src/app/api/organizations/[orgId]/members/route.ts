@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { and, asc, eq, SQL } from "drizzle-orm";
 import { z } from "zod";
-import { and, asc, eq } from "drizzle-orm";
-
 import { db } from "@/lib/db";
 import { requireOrgAccess } from "@/lib/org-guard";
 import { hasPermission } from "@/lib/rbac";
@@ -14,8 +13,9 @@ const membersQuerySchema = z.object({
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { orgId: string } }
+  { params }: { params: Promise<{ orgId: string }> }
 ) {
+  await params; // orgId resolved via requireOrgAccess
   const access = await requireOrgAccess(req);
   if (access instanceof NextResponse) {
     return access;
@@ -28,7 +28,7 @@ export async function GET(
 
   if (!parsedQuery.success) {
     return NextResponse.json(
-      { error: "Invalid query", details: parsedQuery.error.flatten() },
+      { error: "Consulta inválida", details: parsedQuery.error.flatten() },
       { status: 400 }
     );
   }
@@ -36,25 +36,26 @@ export async function GET(
   const status = parsedQuery.data.status ?? "active";
   const limit = parsedQuery.data.limit ?? 50;
 
-  // Enforce permission check (default members have member:read)
+  // Enforce permission check (user:manage required)
   const canReadMembers = await hasPermission(
     access.session.user.id,
     access.orgId,
-    "member:read"
+    "user:manage"
   );
 
   if (!canReadMembers) {
     return NextResponse.json(
-      { error: "Insufficient permissions" },
+      { error: "Permissões insuficientes" },
       { status: 403 }
     );
   }
 
-  let whereClause = eq(organizationMembership.organizationId, access.orgId);
-
-  if (status) {
-    whereClause = and(whereClause, eq(organizationMembership.status, status));
-  }
+  const whereClause: SQL<unknown> = status
+    ? and(
+        eq(organizationMembership.organizationId, access.orgId),
+        eq(organizationMembership.status, status)
+      )!
+    : eq(organizationMembership.organizationId, access.orgId);
 
   const members = await db
     .select({

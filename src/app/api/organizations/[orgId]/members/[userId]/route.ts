@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
-
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireOrgAccess } from "@/lib/org-guard";
 import { rateLimit } from "@/lib/rate-limit";
 import { organizationMembership } from "@/lib/schema";
 
 const updateMemberSchema = z.object({
-  role: z.enum(["owner", "admin", "member"]),
+  role: z.enum(["OWNER", "ADMIN", "MANAGER", "AGENT"]),
 });
 
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { orgId: string; userId: string } }
+  { params }: { params: Promise<{ orgId: string; userId: string }> }
 ) {
-  const access = await requireOrgAccess(req, "admin"); // admin+ can update roles
+  const { orgId, userId } = await params;
+  const access = await requireOrgAccess(req, "ADMIN"); // admin+ pode atualizar papéis
   if (access instanceof NextResponse) {
     return access;
   }
@@ -25,7 +25,7 @@ export async function PUT(
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
+      { error: "Entrada inválida", details: parsed.error.flatten() },
       { status: 400 }
     );
   }
@@ -33,15 +33,15 @@ export async function PUT(
   const { role } = parsed.data;
 
   // Only owners can promote others to owner
-  if (role === "owner" && access.membership.role !== "owner") {
+  if (role === "OWNER" && access.membership.role !== "OWNER") {
     return NextResponse.json(
-      { error: "Only owners can assign owner role" },
+      { error: "Somente OWNER pode conceder OWNER" },
       { status: 403 }
     );
   }
 
-  // Rate limit role updates
-  const rateKey = `member:update:${access.session.user.id}:${access.orgId}`;
+  // Limitar atualização de papéis por usuário/tenant
+  const rateKey = `member:update:${access.session.user.id}:${orgId}`;
   const { success, resetAt, remaining } = await rateLimit(
     rateKey,
     50,
@@ -50,7 +50,7 @@ export async function PUT(
 
   if (!success) {
     return NextResponse.json(
-      { error: "Rate limit exceeded", resetAt },
+      { error: "Limite de atualização de membro excedido", resetAt },
       { status: 429 }
     );
   }
@@ -62,24 +62,24 @@ export async function PUT(
       .where(
         and(
           eq(organizationMembership.organizationId, access.orgId),
-          eq(organizationMembership.userId, params.userId)
+          eq(organizationMembership.userId, userId)
         )
       )
       .limit(1);
 
     if (!membership) {
-      return { error: "Member not found", status: 404 } as const;
+      return { error: "Membro não encontrado", status: 404 } as const;
     }
 
     // Guard against demoting the last owner
-    if (membership.role === "owner" && role !== "owner") {
+    if (membership.role === "OWNER" && role !== "OWNER") {
       const ownerCount = await tx
         .select({ count: sql<number>`count(*)` })
         .from(organizationMembership)
         .where(
           and(
             eq(organizationMembership.organizationId, access.orgId),
-            eq(organizationMembership.role, "owner"),
+            eq(organizationMembership.role, "OWNER"),
             eq(organizationMembership.status, "active")
           )
         );
@@ -88,7 +88,7 @@ export async function PUT(
 
       if (totalOwners <= 1) {
         return {
-          error: "Cannot remove the last owner of the organization",
+          error: "Não é possível remover o último OWNER da organização",
           status: 400,
         } as const;
       }
@@ -112,7 +112,8 @@ export async function PUT(
   });
 
   if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
+    const status = result.status ?? 400;
+    return NextResponse.json({ error: result.error }, { status });
   }
 
   return NextResponse.json({ membership: result.updated, remaining });

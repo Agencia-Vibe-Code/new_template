@@ -693,284 +693,54 @@ export async function requireOrgAccess(
 
 ---
 
-## 🛠️ API Routes
+## 🛠️ API Routes (Fase 4 implementada)
 
-### 1. Organization Management
+Contexto comum das rotas:
+- O proxy `src/proxy.ts` remove headers de contexto enviados pelo cliente e reinjeta `x-org-id` + `x-org-id-proxy=1` somente após `resolveTenant` validar header, path, subdomínio (lista segura de domínios) ou `lastActiveOrgId`.
+- `requireOrgAccess` valida sessão, membership `active` e hierarquia mínima antes de entrar em cada handler.
+- Rate limiting usa `src/lib/rate-limit.ts` com Redis (`REDIS_URL`) em janela fixa; falha se `REDIS_URL` não estiver configurado.
+- IDs são `randomUUID()` e tokens de convite usam `randomBytes(32).toString("base64url")`.
 
-```typescript
-// src/app/api/organizations/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { organization, organizationMembership } from "@/lib/schema";
-import { eq } from "drizzle-orm";
-import { headers } from "next/headers";
-import { nanoid } from "nanoid";
-import { z } from "zod";
-import { Ratelimit } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
+### /api/organizations (`src/app/api/organizations/route.ts`)
+- `GET`: exige sessão; retorna organizações onde o usuário é membro com `id`, `name`, `slug`, `role`, `joinedAt`.
+- `POST`: valida `name`/`slug` com Zod + `slugifyName`, verifica unicidade de slug, rate limit `org:create:<userId>` (5/h), cria `organization` + membership `owner` em transação e retorna `id`, `name`, `slug`, `remaining` (status 201).
 
-// Rate limiting
-const ratelimit = new Ratelimit({
-  redis: Redis.fromEnv(),
-  limiter: Ratelimit.slidingWindow(5, "1 h"), // 5 organizações por hora
-});
+### /api/organizations/[orgId]/switch (`src/app/api/organizations/[orgId]/switch/route.ts`)
+- `POST`: requer sessão; confirma membership `active` no org alvo; atualiza `user.lastActiveOrgId`; retorna `{ success, organizationId }`.
 
-// Schema de validação
-const createOrgSchema = z.object({
-  name: z.string().min(1).max(100).trim(),
-  slug: z.string()
-    .regex(/^[a-z0-9-]+$/, "Slug must contain only lowercase letters, numbers, and hyphens")
-    .min(3)
-    .max(50)
-    .refine((val) => !val.includes("--"), {
-      message: "Slug cannot contain consecutive hyphens",
-    })
-    .optional(),
-});
+### /api/organizations/[orgId]/members (`src/app/api/organizations/[orgId]/members/route.ts`)
+- `GET`: usa `requireOrgAccess`; valida query `status` (default `active`) e `limit` (default 50, máx 100); exige permissão `member:read` (presente por padrão em members); ordena por `joinedAt ASC` e retorna membros com `role`, `status`, `invitedBy`, `name`, `email`.
 
-// GET /api/organizations - Listar organizações do usuário
-export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  
-  const orgs = await db
-    .select({
-      id: organization.id,
-      name: organization.name,
-      slug: organization.slug,
-      role: organizationMembership.role,
-      joinedAt: organizationMembership.joinedAt,
-    })
-    .from(organization)
-    .innerJoin(
-      organizationMembership,
-      eq(organization.id, organizationMembership.organizationId)
-    )
-    .where(eq(organizationMembership.userId, session.user.id));
-  
-  return NextResponse.json(orgs);
-}
+### /api/organizations/[orgId]/members/[userId] (`src/app/api/organizations/[orgId]/members/[userId]/route.ts`)
+- `PUT`: requer `admin+`; body `role` ∈ {owner, admin, member}; apenas owners podem promover para owner; rate limit `member:update:<actorUserId>:<orgId>` (50/h).
+- Transação protege último owner (`COUNT` de owners ativos antes de rebaixar) e retorna membership atualizado + `remaining`.
 
-// POST /api/organizations - Criar nova organização
-export async function POST(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  
-  // Rate limiting
-  const { success } = await ratelimit.limit(session.user.id);
-  if (!success) {
-    return NextResponse.json(
-      { error: "Rate limit exceeded" },
-      { status: 429 }
-    );
-  }
-  
-  // Validar entrada
-  const body = await req.json();
-  const parsed = createOrgSchema.safeParse(body);
-  
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
-      { status: 400 }
-    );
-  }
-  
-  const { name, slug: providedSlug } = parsed.data;
-  
-  // Gerar slug se não fornecido
-  const generatedSlug = providedSlug || name.toLowerCase().replace(/\s+/g, "-");
-  
-  // Verificar unicidade de slug antes de inserir
-  const existingOrg = await db
-    .select()
-    .from(organization)
-    .where(eq(organization.slug, generatedSlug))
-    .limit(1);
-  
-  if (existingOrg[0]) {
-    return NextResponse.json(
-      { error: "Slug already exists" },
-      { status: 409 }
-    );
-  }
-  
-  const orgId = nanoid();
-  const membershipId = nanoid();
-  
-  // Criar organização e membership em transação
-  await db.transaction(async (tx) => {
-    await tx.insert(organization).values({
-      id: orgId,
-      name,
-      slug: generatedSlug,
-      createdBy: session.user.id,
-    });
-    
-    await tx.insert(organizationMembership).values({
-      id: membershipId,
-      organizationId: orgId,
-      userId: session.user.id,
-      role: "owner",
-      status: "active",
-    });
-  });
-  
-  return NextResponse.json({ id: orgId, name, slug: generatedSlug });
-}
-```
+### /api/organizations/[orgId]/invitations (`src/app/api/organizations/[orgId]/invitations/route.ts`)
+- `POST`: requer `admin+`; apenas owners podem convidar owners; body Zod `email`/`role`; rate limit `invite:create:<actorUserId>:<orgId>` (20/h).
+- Gera token base64url 256 bits, expira em 7 dias, cria convite em transação e retorna `id`, `email`, `role`, `expiresAt`, `remaining` (status 201).
 
-### 2. Organization Switching
+### /api/invitations/[token]/accept (`src/app/api/invitations/[token]/accept/route.ts`)
+- `POST`: exige sessão; valida token, expiração e aceita convites não processados.
+- Email da sessão deve bater com o email do convite; transação cria membership (se não existir) com `role` do convite, marca `acceptedAt` e atualiza `user.lastActiveOrgId`; retorna `{ organizationId, role }`.
 
-```typescript
-// src/app/api/organizations/[orgId]/switch/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { requireOrgAccess } from "@/lib/org-guard";
-import { db } from "@/lib/db";
-import { user } from "@/lib/schema";
-import { eq } from "drizzle-orm";
-import { headers } from "next/headers";
-import { auth } from "@/lib/auth";
+### Tabela rápida de contratos (fase 4)
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { orgId: string } }
-) {
-  const result = await requireOrgAccess(req);
-  
-  if (result instanceof NextResponse) {
-    return result; // Error response
-  }
-  
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  
-  // Atualizar lastActiveOrgId no user record
-  await db
-    .update(user)
-    .set({ lastActiveOrgId: params.orgId })
-    .where(eq(user.id, session.user.id));
-  
-  return NextResponse.json({
-    success: true,
-    organizationId: params.orgId,
-  });
-}
-```
+| Método/Path | Auth/Context | Request | Respostas principais |
+| --- | --- | --- | --- |
+| GET `/api/organizations` | Sessão | — | 200 `{ id, name, slug, role, joinedAt }[]` ; 401 |
+| POST `/api/organizations` | Sessão | JSON `{ name, slug? }` | 201 `{ id, name, slug, remaining }` ; 400 validação ; 409 slug ; 429 rate |
+| POST `/api/organizations/[orgId]/switch` | Sessão + membership ativa | — | 200 `{ success, organizationId }` ; 401/403 |
+| GET `/api/organizations/[orgId]/members` | Sessão + membership ativa | Query `status?`, `limit?` | 200 `{ organizationId, members[] }` ; 400 validação ; 403 permissão |
+| PUT `/api/organizations/[orgId]/members/[userId]` | Sessão + `admin+` | JSON `{ role }` | 200 `{ membership, remaining }` ; 400 validação/último owner ; 403 permissão ; 404 |
+| POST `/api/organizations/[orgId]/invitations` | Sessão + `admin+` | JSON `{ email, role? }` | 201 `{ id, email, role, expiresAt, remaining }` ; 400 ; 403 owner-only ; 429 |
+| POST `/api/invitations/[token]/accept` | Sessão | — | 200 `{ organizationId, role }` ; 400 já aceita ; 401 ; 403 email mismatch ; 404 ; 410 expirada |
 
-### 3. RBAC Permissions Check
-
-```typescript
-// src/lib/rbac.ts
-import { db } from "./db";
-import { 
-  organizationMembership, 
-  role, 
-  permission, 
-  rolePermission,
-  userRole 
-} from "./schema";
-import { eq, and, inArray, or } from "drizzle-orm";
-
-export async function hasPermission(
-  userId: string,
-  orgId: string,
-  permissionName: string
-): Promise<boolean> {
-  // 1. Obter membership
-  const membership = await db
-    .select()
-    .from(organizationMembership)
-    .where(
-      and(
-        eq(organizationMembership.userId, userId),
-        eq(organizationMembership.organizationId, orgId),
-        eq(organizationMembership.status, "active")
-      )
-    )
-    .limit(1);
-  
-  if (!membership[0]) return false;
-  
-  const membershipRole = membership[0].role;
-  
-  // 2. Owner tem todas as permissões
-  if (membershipRole === "owner") return true;
-  
-  // 3. Admin tem maioria, exceto algumas críticas
-  if (membershipRole === "admin") {
-    const adminRestricted = ["organization:delete", "organization:transfer"];
-    return !adminRestricted.includes(permissionName);
-  }
-  
-  // 4. Buscar roles customizados do usuário
-  const userRoles = await db
-    .select({ roleId: userRole.roleId })
-    .from(userRole)
-    .where(
-      and(
-        eq(userRole.userId, userId),
-        eq(userRole.organizationId, orgId)
-      )
-    );
-  
-  const roleIds = userRoles.map((ur) => ur.roleId);
-  
-  // 5. Se for "member" sem roles customizados, verificar permissões padrão de "member"
-  if (membershipRole === "member" && roleIds.length === 0) {
-    const memberPermissions = await getDefaultMemberPermissions();
-    return memberPermissions.includes(permissionName);
-  }
-  
-  // 6. Verificar permissões de roles customizados
-  if (roleIds.length > 0) {
-    const hasPerm = await db
-      .select()
-      .from(rolePermission)
-      .innerJoin(permission, eq(rolePermission.permissionId, permission.id))
-      .where(
-        and(
-          inArray(rolePermission.roleId, roleIds),
-          eq(permission.name, permissionName)
-        )
-      )
-      .limit(1);
-    
-    if (hasPerm.length > 0) return true;
-  }
-  
-  return false;
-}
-
-async function getDefaultMemberPermissions(): Promise<string[]> {
-  // Retornar lista de permissões padrão para "member"
-  // Estas devem ser populadas via seed
-  return [
-    "project:read",
-    "project:create",
-    "user:read",
-    // Adicionar outras permissões padrão conforme necessário
-  ];
-}
-
-export async function requirePermission(
-  userId: string,
-  orgId: string,
-  permissionName: string
-) {
-  const hasPerm = await hasPermission(userId, orgId, permissionName);
-  if (!hasPerm) {
-    throw new Error(`Permission denied: ${permissionName}`);
-  }
-}
-```
+### Rate limiting (Redis) — env vars e estratégia
+- Obrigatório: `REDIS_URL` (ex.: `redis://default:<password>@host:port/0`)
+- Estratégia: janela fixa (fixed window) por rota/chave; TTL = `windowMs` do handler
+- Prefixo usado: `ratelimit` (`ratelimit:<key>:<windowId>`)
+- Erro de configuração lança exception clara no helper `src/lib/rate-limit.ts`
+- `REDIS_URL` já está listado em `env.example`
 
 ---
 
@@ -1001,8 +771,7 @@ export async function requirePermission(
   - ✅ Arquivo `src/lib/db-context.ts` criado
   - ✅ Função `withOrgContext` implementada usando `SET LOCAL` em transações
 - [x] Implementar rate limiting básico
-  - ✅ Arquivo `src/lib/rate-limit.ts` criado
-  - ✅ Implementação em memória para desenvolvimento (com aviso para produção)
+  - ✅ Arquivo `src/lib/rate-limit.ts` agora usa Redis (fixed window) com `REDIS_URL`
 - [x] Testar isolamento básico
   - ✅ Script `scripts/test-isolation.ts` criado para testes básicos
 
@@ -1048,16 +817,16 @@ export async function requirePermission(
 - Garantir que a lista de permissões padrão inclui `team:create|update|delete` se times forem habilitados, alinhado às permissões recomendadas em Teams do plugin de organização.
 
 ### Fase 4: API Routes (Sprint 4)
-- [ ] GET /api/organizations (listar) - com validação
-- [ ] POST /api/organizations (criar) - com validação Zod, rate limiting, verificação de slug
-- [ ] POST /api/organizations/[orgId]/switch - atualizar lastActiveOrgId
-- [ ] GET /api/organizations/[orgId]/members - com validação
-- [ ] POST /api/organizations/[orgId]/invitations - com validação email, tokens seguros, rate limiting, transação
-- [ ] POST /api/invitations/[token]/accept - com transação
-- [ ] PUT /api/organizations/[orgId]/members/[userId] - atualizar role com transação
-- [ ] Todas as rotas: validação de entrada com Zod
-- [ ] Todas as rotas: rate limiting apropriado
-- [ ] Todas as operações críticas: transações
+- [x] GET /api/organizations (listar) - com validação
+- [x] POST /api/organizations (criar) - com validação Zod, rate limiting, verificação de slug
+- [x] POST /api/organizations/[orgId]/switch - atualizar lastActiveOrgId
+- [x] GET /api/organizations/[orgId]/members - com validação
+- [x] POST /api/organizations/[orgId]/invitations - com validação email, tokens seguros, rate limiting, transação
+- [x] POST /api/invitations/[token]/accept - com transação
+- [x] PUT /api/organizations/[orgId]/members/[userId] - atualizar role com transação
+- [x] Todas as rotas: validação de entrada com Zod
+- [x] Todas as rotas: rate limiting apropriado
+- [x] Todas as operações críticas: transações
 
 ### Fase 5: UI Components (Sprint 5)
 - [ ] Organization switcher component
@@ -1369,6 +1138,6 @@ Estas otimizações não são críticas para o funcionamento básico, mas devem 
 ---
 
 **Próximos Passos:** 
-1. Implementar testes de autorização cobrindo hierarquia, roles customizadas e permissões padrão de member
-2. Iniciar Fase 4 (rotas de API) priorizando GET/POST `/api/organizations` e fluxo de switch com validação
-3. Validar seed de permissões em ambiente local antes de subir novas rotas (rodar `pnpm run db:seed:permissions`)
+1. Avançar para Fase 5 (UI): switcher de organização, fluxo de criação, gestão de membros/convites e renderização condicionada por permissão.
+2. Expandir Fase 6 (testes): casos negativos cross-tenant, demote do último owner, rate limits e validação de hostname/subdomínio.
+3. Trocar rate limiting in-memory por backend distribuído (Redis/Upstash/KV) antes de produção e documentar configuração.

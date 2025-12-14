@@ -13,6 +13,23 @@ import { organization, user } from "@/lib/schema";
  * Nota: Em produção, considere usar um cache distribuído (Redis) se necessário.
  */
 let cachedAllowedDomains: string[] | null = null;
+let cachedAppUrl: string | null = null;
+
+function normalizeDomain(domain: string): string {
+  const trimmed = domain.toLowerCase().trim();
+  if (!trimmed) return "";
+
+  try {
+    // URL.hostname já remove a porta; adicionamos esquema quando necessário para evitar exceção.
+    const parsed = trimmed.includes("://")
+      ? new URL(trimmed)
+      : new URL(`http://${trimmed}`);
+    return parsed.hostname;
+  } catch {
+    // Fallback defensivo caso o valor não seja um hostname/URL válido.
+    return trimmed.split(":")[0];
+  }
+}
 
 /**
  * Obtém lista de domínios permitidos com cache.
@@ -21,37 +38,45 @@ let cachedAllowedDomains: string[] | null = null;
  * @returns Array de domínios permitidos (normalizados: lowercase, trim)
  */
 function getAllowedDomains(): string[] {
-  if (cachedAllowedDomains !== null) {
-    return cachedAllowedDomains;
-  }
-
   try {
     const clientEnv = getClientEnv();
+    const appUrl = clientEnv.NEXT_PUBLIC_APP_URL;
+
+    // Reutiliza cache apenas se a origem (appUrl) não mudou.
+    if (cachedAllowedDomains !== null && cachedAppUrl === appUrl) {
+      return cachedAllowedDomains;
+    }
+
     const domains = [
-      clientEnv.NEXT_PUBLIC_APP_URL.replace(/^https?:\/\//, ""),
+      appUrl,
       // Adicionar outros domínios permitidos se necessário
       // Ex: process.env.ALLOWED_DOMAINS?.split(",").map(d => d.trim())
     ]
       .filter(Boolean)
-      .map((domain) => domain.toLowerCase().trim());
+      .map(normalizeDomain)
+      .filter(Boolean);
 
     // Validar que lista não está vazia
     if (domains.length === 0) {
       console.error(
-        "[tenant-resolver] No allowed domains configured for tenant resolution"
+        "[tenant-resolver] Nenhum domínio permitido configurado para resolver tenant"
       );
       cachedAllowedDomains = [];
+      cachedAppUrl = appUrl;
       return [];
     }
 
-    cachedAllowedDomains = domains;
-    return domains;
+    const uniqueDomains = Array.from(new Set(domains));
+    cachedAllowedDomains = uniqueDomains;
+    cachedAppUrl = appUrl;
+    return uniqueDomains;
   } catch (error) {
     console.error(
-      "[tenant-resolver] Failed to get client environment variables:",
+      "[tenant-resolver] Falha ao carregar variáveis de ambiente do cliente:",
       error
     );
     cachedAllowedDomains = [];
+    cachedAppUrl = null;
     return [];
   }
 }
@@ -104,7 +129,10 @@ export async function resolveTenant(
   }
 
   // Estratégia 3: Subdomain (com validação de segurança)
-  const hostname = req.headers.get("host") || "";
+  const hostname =
+    req.headers.get("host") ||
+    req.nextUrl.host || // NextRequest sempre possui nextUrl; host inclui porta
+    "";
 
   // Obter lista de domínios permitidos (com cache)
   const allowedDomains = getAllowedDomains();
@@ -116,26 +144,33 @@ export async function resolveTenant(
 
   // Normalizar hostname para comparação
   const normalizedHostname = hostname.toLowerCase().trim();
+  const hostnameWithoutPort = normalizedHostname.split(":")[0];
 
   // Validar hostname contra lista de domínios permitidos
   const isValidHost = allowedDomains.some((domain) => {
     return (
-      normalizedHostname === domain ||
-      normalizedHostname.endsWith(`.${domain}`)
+      hostnameWithoutPort === domain ||
+      hostnameWithoutPort.endsWith(`.${domain}`)
     );
   });
 
   if (!isValidHost) {
     // Log tentativa de hostname inválido (para auditoria e segurança)
     console.warn(
-      `[tenant-resolver] Invalid hostname attempted: ${hostname} (allowed: ${allowedDomains.join(", ")})`
+      `[tenant-resolver] Host inválido: ${hostname} (permitidos: ${allowedDomains.join(", ")})`
     );
     return null;
   }
 
   // Se hostname é válido, tentar resolver por subdomain
-  const subdomain = normalizedHostname.split(".")[0];
-  if (subdomain && subdomain !== "www" && subdomain !== "app") {
+  const subdomain = hostnameWithoutPort.split(".")[0];
+  const hasMeaningfulSubdomain =
+    subdomain &&
+    subdomain !== "www" &&
+    subdomain !== "app" &&
+    subdomain !== hostnameWithoutPort; // evita tratar domínio raiz como subdomínio
+
+  if (hasMeaningfulSubdomain) {
     // Verificar se subdomain corresponde a um slug válido
     const org = await db
       .select()
@@ -146,11 +181,14 @@ export async function resolveTenant(
     if (org[0]) {
       return org[0].id;
     }
+
+    // Evitar fallback para lastActiveOrgId quando subdomínio é inválido
+    return null;
   }
 
   // Estratégia 4: Fallback - lastActiveOrgId do usuário
   // Usar headers passados como parâmetro (middleware) ou obter do contexto (route handlers)
-  const sessionHeaders = requestHeaders || (await headers());
+  const sessionHeaders = requestHeaders ?? req.headers ?? (await headers());
   const session = await auth.api.getSession({ headers: sessionHeaders });
   if (session?.user) {
     // Buscar lastActiveOrgId do user record

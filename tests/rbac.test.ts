@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
-
 import {
   __resetDbForTesting,
   __setDbForTesting,
@@ -76,102 +75,102 @@ afterEach(() => {
   __resetDbForTesting();
 });
 
-test("owner bypasses permission checks", async () => {
+test("OWNER bypasses permission checks", async () => {
   __setDbForTesting(
-    new MockDb({ membership: [{ role: "owner", status: "active" }] }) as any
+    new MockDb({ membership: [{ role: "OWNER", status: "active" }] }) as any
   );
 
   const result = await hasPermission(
     "user-1",
     "org-1",
-    "organization:delete"
+    "tenant:manage"
   );
 
   assert.equal(result, true);
 });
 
-test("admin has broad access but is blocked on restricted actions", async () => {
+test("ADMIN inherits management permissions", async () => {
   __setDbForTesting(
-    new MockDb({ membership: [{ role: "admin", status: "active" }] }) as any
+    new MockDb({ membership: [{ role: "ADMIN", status: "active" }] }) as any
   );
 
-  const allowed = await hasPermission("user-1", "org-1", "project:read");
-  const blocked = await hasPermission(
-    "user-1",
-    "org-1",
-    "organization:delete"
+  const canPublish = await hasPermission("user-1", "org-1", "form:publish");
+  const canManageUsers = await hasPermission("user-1", "org-1", "user:manage");
+
+  assert.equal(canPublish, true);
+  assert.equal(canManageUsers, true);
+});
+
+test("MANAGER can ship forms but not manage tenants", async () => {
+  __setDbForTesting(
+    new MockDb({ membership: [{ role: "MANAGER", status: "active" }] }) as any
   );
 
-  assert.equal(allowed, true);
+  const canPublish = await hasPermission("user-1", "org-1", "form:publish");
+  const blocked = await hasPermission("user-1", "org-1", "tenant:manage");
+
+  assert.equal(canPublish, true);
   assert.equal(blocked, false);
 });
 
-test("member receives default permissions by default", async () => {
+test("AGENT can only create/view submissions by default", async () => {
   __setDbForTesting(
-    new MockDb({ membership: [{ role: "member", status: "active" }] }) as any
+    new MockDb({ membership: [{ role: "AGENT", status: "active" }] }) as any
   );
 
-  const allowed = await hasPermission("user-1", "org-1", "project:create");
-  const denied = await hasPermission("user-1", "org-1", "organization:delete");
+  const canSubmit = await hasPermission("user-1", "org-1", "submission:create");
+  const blocked = await hasPermission("user-1", "org-1", "form:edit");
 
-  assert.equal(allowed, true);
-  assert.equal(denied, false);
+  assert.equal(canSubmit, true);
+  assert.equal(blocked, false);
 });
 
-test("member gains permissions via custom roles", async () => {
+test("custom roles add permissions without removing defaults", async () => {
   __setDbForTesting(
     new MockDb({
-      membership: [{ role: "member", status: "active" }],
+      membership: [{ role: "AGENT", status: "active" }],
       userRoles: [{ roleId: "role-1" }],
-      rolePermissions: [{ permission: { name: "project:delete" } }],
+      rolePermissions: [{ permission: { name: "submission:export" }, role: { organizationId: "org-1" } }],
     }) as any
   );
 
-  const allowed = await hasPermission("user-1", "org-1", "project:delete");
-
-  assert.equal(allowed, true);
-});
-
-test("member keeps default permissions even when custom roles exist", async () => {
-  __setDbForTesting(
-    new MockDb({
-      membership: [{ role: "member", status: "active" }],
-      userRoles: [{ roleId: "role-1" }],
-      rolePermissions: [], // custom role without permissions
-    }) as any
+  const canExport = await hasPermission("user-1", "org-1", "submission:export");
+  const stillCanSubmit = await hasPermission(
+    "user-1",
+    "org-1",
+    "submission:create"
   );
 
-  const allowed = await hasPermission("user-1", "org-1", "project:create");
-
-  assert.equal(allowed, true);
+  assert.equal(canExport, true);
+  assert.equal(stillCanSubmit, true);
 });
 
 test("non-members are denied", async () => {
   __setDbForTesting(new MockDb({ membership: [] }) as any);
 
-  const result = await hasPermission("user-1", "org-1", "project:read");
+  const result = await hasPermission("user-1", "org-1", "submission:view");
 
   assert.equal(result, false);
 });
 
 test("requirePermission throws when permission is missing", async () => {
   __setDbForTesting(
-    new MockDb({ membership: [{ role: "member", status: "active" }] }) as any
+    new MockDb({ membership: [{ role: "AGENT", status: "active" }] }) as any
   );
 
   await assert.rejects(() =>
-    requirePermission("user-1", "org-1", "organization:delete")
+    requirePermission("user-1", "org-1", "tenant:manage")
   );
 });
 
 test("role hierarchy enforces minimum role checks", async () => {
   __setDbForTesting(
-    new MockDb({ membership: [{ role: "admin", status: "active" }] }) as any
+    new MockDb({ membership: [{ role: "ADMIN", status: "active" }] }) as any
   );
 
-  const meetsMember = await hasMinimumRole("user-1", "org-1", "member");
-  const meetsOwner = await hasMinimumRole("user-1", "org-1", "owner");
+  const meetsAgent = await hasMinimumRole("user-1", "org-1", "AGENT");
+  const meetsOwner = await hasMinimumRole("user-1", "org-1", "OWNER");
 
-  assert.equal(meetsMember, true);
+  assert.equal(meetsAgent, true);
   assert.equal(meetsOwner, false);
 });

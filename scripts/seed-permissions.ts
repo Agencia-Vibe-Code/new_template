@@ -36,124 +36,61 @@ type SeedDependencies = {
   eq: typeof import("drizzle-orm")["eq"];
 };
 
-// Permissões padrão do sistema
+// Permissões padrão do sistema alinhadas ao app de formulário/PDF
 const defaultPermissions = [
-  // Organization
   {
-    name: "organization:read",
-    resource: "organization",
-    action: "read",
-    description: "Read organization details",
+    name: "tenant:manage",
+    resource: "tenant",
+    action: "manage",
+    description: "Gerenciar tenant, domínios e isolamento",
   },
   {
-    name: "organization:update",
-    resource: "organization",
-    action: "update",
-    description: "Update organization settings",
-  },
-  {
-    name: "organization:delete",
-    resource: "organization",
-    action: "delete",
-    description: "Delete organization (owner only)",
-  },
-  {
-    name: "organization:transfer",
-    resource: "organization",
-    action: "transfer",
-    description: "Transfer organization ownership (owner only)",
-  },
-
-  // Members
-  {
-    name: "member:read",
-    resource: "member",
-    action: "read",
-    description: "View organization members",
-  },
-  {
-    name: "member:invite",
-    resource: "member",
-    action: "invite",
-    description: "Invite new members to organization",
-  },
-  {
-    name: "member:update",
-    resource: "member",
-    action: "update",
-    description: "Update member roles and status",
-  },
-  {
-    name: "member:remove",
-    resource: "member",
-    action: "remove",
-    description: "Remove members from organization",
-  },
-
-  // Projects (exemplo)
-  {
-    name: "project:create",
-    resource: "project",
-    action: "create",
-    description: "Create new projects",
-  },
-  {
-    name: "project:read",
-    resource: "project",
-    action: "read",
-    description: "View projects",
-  },
-  {
-    name: "project:update",
-    resource: "project",
-    action: "update",
-    description: "Update project details",
-  },
-  {
-    name: "project:delete",
-    resource: "project",
-    action: "delete",
-    description: "Delete projects",
-  },
-
-  // Users
-  {
-    name: "user:read",
+    name: "user:manage",
     resource: "user",
-    action: "read",
-    description: "View user profiles",
+    action: "manage",
+    description: "Gerenciar membros, convites e papéis",
   },
   {
-    name: "user:update",
-    resource: "user",
-    action: "update",
-    description: "Update user profiles",
-  },
-
-  // Roles (para RBAC customizado)
-  {
-    name: "role:create",
-    resource: "role",
+    name: "form:create",
+    resource: "form",
     action: "create",
-    description: "Create custom roles",
+    description: "Criar novos modelos de formulário",
   },
   {
-    name: "role:read",
-    resource: "role",
-    action: "read",
-    description: "View roles",
+    name: "form:edit",
+    resource: "form",
+    action: "edit",
+    description: "Editar campos e cópia dos modelos",
   },
   {
-    name: "role:update",
-    resource: "role",
-    action: "update",
-    description: "Update role permissions",
+    name: "form:publish",
+    resource: "form",
+    action: "publish",
+    description: "Publicar ou arquivar modelos",
   },
   {
-    name: "role:delete",
-    resource: "role",
-    action: "delete",
-    description: "Delete custom roles",
+    name: "form:map",
+    resource: "form",
+    action: "map",
+    description: "Configurar coordenadas de campos no PDF base",
+  },
+  {
+    name: "submission:create",
+    resource: "submission",
+    action: "create",
+    description: "Preencher e salvar uma submissão",
+  },
+  {
+    name: "submission:view",
+    resource: "submission",
+    action: "view",
+    description: "Consultar submissões existentes",
+  },
+  {
+    name: "submission:export",
+    resource: "submission",
+    action: "export",
+    description: "Gerar PDF sobre o template original",
   },
 ];
 

@@ -1,13 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-
+import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
-import { organization, organizationMembership } from "@/lib/schema";
+import { organization, organizationMembership, user } from "@/lib/schema";
 
 const createOrgSchema = z.object({
   name: z.string().min(1).max(100).trim(),
@@ -35,8 +34,14 @@ function slugifyName(name: string): string {
 export async function GET() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
+
+  const [userRecord] = await db
+    .select({ lastActiveOrgId: user.lastActiveOrgId })
+    .from(user)
+    .where(eq(user.id, session.user.id))
+    .limit(1);
 
   const orgs = await db
     .select({
@@ -53,20 +58,25 @@ export async function GET() {
     )
     .where(eq(organizationMembership.userId, session.user.id));
 
-  return NextResponse.json(orgs);
+  const enriched = orgs.map((org) => ({
+    ...org,
+    active: org.id === userRecord?.lastActiveOrgId,
+  }));
+
+  return NextResponse.json(enriched);
 }
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
   const rateKey = `org:create:${session.user.id}`;
   const { success, remaining, resetAt } = await rateLimit(rateKey, 5, 60 * 60 * 1000);
   if (!success) {
     return NextResponse.json(
-      { error: "Rate limit exceeded", resetAt },
+      { error: "Limite de criação excedido", resetAt },
       { status: 429 }
     );
   }
@@ -76,7 +86,7 @@ export async function POST(req: NextRequest) {
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
+      { error: "Entrada inválida", details: parsed.error.flatten() },
       { status: 400 }
     );
   }
@@ -92,7 +102,7 @@ export async function POST(req: NextRequest) {
     .limit(1);
 
   if (existing[0]) {
-    return NextResponse.json({ error: "Slug already exists" }, { status: 409 });
+    return NextResponse.json({ error: "Slug já existe" }, { status: 409 });
   }
 
   const orgId = randomUUID();
@@ -110,9 +120,14 @@ export async function POST(req: NextRequest) {
       id: membershipId,
       organizationId: orgId,
       userId: session.user.id,
-      role: "owner",
+      role: "OWNER",
       status: "active",
     });
+
+    await tx
+      .update(user)
+      .set({ lastActiveOrgId: orgId })
+      .where(eq(user.id, session.user.id));
   });
 
   return NextResponse.json(

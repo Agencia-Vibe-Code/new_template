@@ -191,9 +191,9 @@ async function testRBAC() {
 
     // Test 4: Role hierarchy
     console.log("🧪 Test 4: Role hierarchy");
-    const ownerHasMinAdmin = await hasMinimumRole(ownerId, orgId, "admin");
-    const adminHasMinMember = await hasMinimumRole(adminId, orgId, "member");
-    const memberHasMinAdmin = await hasMinimumRole(memberId, orgId, "admin");
+    const ownerHasMinAdmin = await hasMinimumRole(ownerId, orgId, "ADMIN");
+    const adminHasMinMember = await hasMinimumRole(adminId, orgId, "AGENT");
+    const memberHasMinAdmin = await hasMinimumRole(memberId, orgId, "ADMIN");
     console.log(`   Owner >= Admin: ${ownerHasMinAdmin ? "✅" : "❌"}`);
     console.log(`   Admin >= Member: ${adminHasMinMember ? "✅" : "❌"}`);
     console.log(`   Member >= Admin: ${memberHasMinAdmin ? "❌ (expected)" : "✅"}`);
@@ -204,9 +204,9 @@ async function testRBAC() {
 
     // Test 5: Role checks
     console.log("🧪 Test 5: Role checks");
-    const ownerIsOwner = await hasRole(ownerId, orgId, "owner");
-    const adminIsAdmin = await hasRole(adminId, orgId, "admin");
-    const memberIsMember = await hasRole(memberId, orgId, "member");
+    const ownerIsOwner = await hasRole(ownerId, orgId, "OWNER");
+    const adminIsAdmin = await hasRole(adminId, orgId, "ADMIN");
+    const memberIsMember = await hasRole(memberId, orgId, "AGENT");
     console.log(`   Owner is owner: ${ownerIsOwner ? "✅" : "❌"}`);
     console.log(`   Admin is admin: ${adminIsAdmin ? "✅" : "❌"}`);
     console.log(`   Member is member: ${memberIsMember ? "✅" : "❌"}`);
@@ -234,10 +234,10 @@ async function testRBAC() {
     const ownerRole = await getUserRole(ownerId, orgId);
     const adminRole = await getUserRole(adminId, orgId);
     const memberRole = await getUserRole(memberId, orgId);
-    console.log(`   Owner role: ${ownerRole === "owner" ? "✅" : "❌"}`);
-    console.log(`   Admin role: ${adminRole === "admin" ? "✅" : "❌"}`);
-    console.log(`   Member role: ${memberRole === "member" ? "✅" : "❌"}`);
-    if (ownerRole !== "owner" || adminRole !== "admin" || memberRole !== "member") {
+    console.log(`   Owner role: ${ownerRole === "OWNER" ? "✅" : "❌"}`);
+    console.log(`   Admin role: ${adminRole === "ADMIN" ? "✅" : "❌"}`);
+    console.log(`   Member role: ${memberRole === "AGENT" ? "✅" : "❌"}`);
+    if (ownerRole !== "OWNER" || adminRole !== "ADMIN" || memberRole !== "AGENT") {
       throw new Error("getUserRole not working correctly");
     }
     console.log("✅ Test 7 passed\n");
@@ -272,4 +272,3 @@ testRBAC()
     console.error("❌ Test execution failed:", error);
     process.exit(1);
   });
-

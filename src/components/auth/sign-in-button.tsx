@@ -7,7 +7,7 @@ export function SignInButton() {
   const { data: session, isPending } = useSession();
 
   if (isPending) {
-    return <Button disabled>Loading...</Button>;
+    return <Button disabled>Carregando...</Button>;
   }
 
   if (session) {
@@ -23,7 +23,7 @@ export function SignInButton() {
         });
       }}
     >
-      Sign in
+      Entrar com Google
     </Button>
   );
 }

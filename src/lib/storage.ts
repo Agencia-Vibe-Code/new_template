@@ -73,7 +73,7 @@ export function sanitizeFilename(filename: string): string {
 
   // Ensure filename is not empty
   if (!sanitized || sanitized.length === 0) {
-    throw new Error("Invalid filename");
+    throw new Error("Nome de arquivo inválido");
   }
 
   // Limit filename length
@@ -100,7 +100,7 @@ export function validateFile(
   if (buffer.length > maxSize) {
     return {
       valid: false,
-      error: `File too large. Maximum size is ${Math.round(maxSize / 1024 / 1024)}MB`,
+      error: `Arquivo muito grande. Tamanho máximo: ${Math.round(maxSize / 1024 / 1024)}MB`,
     };
   }
 
@@ -109,7 +109,7 @@ export function validateFile(
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     return {
       valid: false,
-      error: `File type not allowed. Allowed extensions: ${Array.from(ALLOWED_EXTENSIONS).join(", ")}`,
+      error: `Tipo de arquivo não permitido. Extensões aceitas: ${Array.from(ALLOWED_EXTENSIONS).join(", ")}`,
     };
   }
 
@@ -218,7 +218,6 @@ export async function deleteFile(url: string): Promise<void> {
     }
   }
 }
-
 
 
 

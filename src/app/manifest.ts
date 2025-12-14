@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Agentic Coding Boilerplate",
-    short_name: "Agentic",
+    name: "Roteiro Builder",
+    short_name: "Roteiro",
     description:
-      "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling",
+      "Form builder multi-tenant com RBAC e exportação PDF idêntica ao roteiro de visita.",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

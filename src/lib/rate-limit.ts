@@ -1,127 +1,94 @@
 /**
- * Basic rate limiting implementation for development.
- * 
- * ⚠️ WARNING: This is an in-memory implementation and will not work
- * across multiple server instances. For production, use a proper
- * rate limiting solution like:
- * - @upstash/ratelimit with Redis
- * - Vercel KV
- * - Other distributed rate limiting solutions
+ * Redis-backed rate limiter using a fixed window strategy.
+ *
+ * Requirements:
+ * - Set REDIS_URL (e.g., redis://user:pass@host:port/db)
+ *
+ * Returns success/remaining/resetAt (ms timestamp).
  */
+import Redis from "ioredis";
 
-interface RateLimitEntry {
-  count: number;
+type RateLimitResult = {
+  success: boolean;
+  remaining: number;
   resetAt: number;
-}
+};
 
-// In-memory store (development only)
-const rateLimitStore = new Map<string, RateLimitEntry>();
+const redisPrefix = "ratelimit";
+let redisClient: Redis | null = null;
 
-/**
- * Validates that rate limiting is properly configured for the environment.
- * Throws an error in production if distributed rate limiting is not available.
- */
-function validateRateLimitConfig(): void {
-  if (process.env.NODE_ENV === "production") {
-    const hasRedis = !!(
-      process.env.REDIS_URL ||
-      process.env.UPSTASH_REDIS_REST_URL ||
-      process.env.KV_REST_API_URL ||
-      process.env.KV_URL
+function getRedis(): Redis {
+  if (redisClient) return redisClient;
+
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    throw new Error(
+      "Rate limit exige REDIS_URL (ex: redis://user:pass@host:port/db)"
     );
-
-    if (!hasRedis) {
-      throw new Error(
-        "Rate limiting in production requires a distributed storage solution. " +
-        "Please configure one of the following:\n" +
-        "  - REDIS_URL (for Redis)\n" +
-        "  - UPSTASH_REDIS_REST_URL (for Upstash Redis)\n" +
-        "  - KV_REST_API_URL or KV_URL (for Vercel KV)\n\n" +
-        "For development, this in-memory implementation is acceptable, " +
-        "but it will not work correctly with multiple server instances."
-      );
-    }
   }
+
+  redisClient = new Redis(url, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 2,
+  });
+
+  redisClient.on("error", (err) => {
+    console.error("[rate-limit] Redis error:", err);
+  });
+
+  return redisClient;
 }
 
 /**
- * Simple rate limiter using sliding window algorithm
- * @param key - Unique identifier for the rate limit (e.g., user ID)
- * @param limit - Maximum number of requests allowed
- * @param windowMs - Time window in milliseconds
- * @returns Object with success status and remaining requests
+ * Fixed-window limiter: counts hits per (key, windowId).
+ * Window resets every `windowMs`. TTL is set on first write.
  */
 export async function rateLimit(
   key: string,
   limit: number,
   windowMs: number
-): Promise<{ success: boolean; remaining: number; resetAt: number }> {
-  // Validate configuration in production
-  validateRateLimitConfig();
+): Promise<RateLimitResult> {
+  const redis = getRedis();
+  if (redis.status === "wait") {
+    await redis.connect();
+  }
+
   const now = Date.now();
-  const entry = rateLimitStore.get(key);
+  const windowId = Math.floor(now / windowMs);
+  const redisKey = `${redisPrefix}:${key}:${windowId}`;
 
-  if (!entry || entry.resetAt < now) {
-    // Create new entry or reset expired entry
-    const newEntry: RateLimitEntry = {
-      count: 1,
-      resetAt: now + windowMs,
-    };
-    rateLimitStore.set(key, newEntry);
-    return {
-      success: true,
-      remaining: limit - 1,
-      resetAt: newEntry.resetAt,
-    };
+  const pipeline = redis.multi();
+  pipeline.set(redisKey, "0", "PX", windowMs, "NX");
+  pipeline.incr(redisKey);
+  pipeline.pttl(redisKey);
+
+  const [, incrResult, ttlResult] = (await pipeline.exec()) ?? [];
+  const count = typeof incrResult?.[1] === "number" ? incrResult[1] : 0;
+  let ttl = typeof ttlResult?.[1] === "number" ? ttlResult[1] : windowMs;
+
+  if (ttl < 0) {
+    // Key exists without TTL; ensure it expires.
+    await redis.pexpire(redisKey, windowMs);
+    ttl = windowMs;
   }
 
-  if (entry.count >= limit) {
-    return {
-      success: false,
-      remaining: 0,
-      resetAt: entry.resetAt,
-    };
-  }
+  const success = count <= limit;
+  const remaining = Math.max(0, limit - count);
+  const resetAt = now + ttl;
 
-  // Increment count
-  entry.count++;
-  rateLimitStore.set(key, entry);
-
-  return {
-    success: true,
-    remaining: limit - entry.count,
-    resetAt: entry.resetAt,
-  };
+  return { success, remaining, resetAt };
 }
 
 /**
- * Clear rate limit for a specific key (useful for testing)
+ * Clear a specific rate-limit key (test helper).
  */
-export function clearRateLimit(key: string): void {
-  rateLimitStore.delete(key);
-}
-
-/**
- * Clear all rate limits (useful for testing)
- */
-export function clearAllRateLimits(): void {
-  rateLimitStore.clear();
-}
-
-/**
- * Clean up expired entries (should be called periodically)
- */
-export function cleanupExpiredEntries(): void {
-  const now = Date.now();
-  for (const [key, entry] of rateLimitStore.entries()) {
-    if (entry.resetAt < now) {
-      rateLimitStore.delete(key);
-    }
+export async function clearRateLimit(key: string, windowMs: number): Promise<void> {
+  const redis = getRedis();
+  if (redis.status === "wait") {
+    await redis.connect();
   }
-}
 
-// Cleanup expired entries every 5 minutes
-if (typeof setInterval !== "undefined") {
-  setInterval(cleanupExpiredEntries, 5 * 60 * 1000);
+  const windowId = Math.floor(Date.now() / windowMs);
+  const redisKey = `${redisPrefix}:${key}:${windowId}`;
+  await redis.del(redisKey);
 }
-

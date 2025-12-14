@@ -2,14 +2,12 @@
  * RBAC (Role-Based Access Control) utilities
  * 
  * This module provides functions to check user permissions within organizations.
- * It implements a hierarchical role system: owner > admin > member
- * 
- * Roles:
- * - owner: Full access to everything (bypasses all permission checks)
- * - admin: Most permissions except critical organization operations
- * - member: Default permissions + custom role permissions
- * 
- * Custom roles can be created per organization with specific permissions.
+ * It implements a hierarchical role system for the Roteiro de Visita builder:
+ * OWNER > ADMIN > MANAGER > AGENT
+ *
+ * The application also supports custom roles through the `role` + `user_role`
+ * tables. System roles are resolved from organization_membership.role while
+ * custom role grants are additive via user_role + role_permission.
  */
 
 import { eq, and, inArray } from "drizzle-orm";
@@ -42,36 +40,60 @@ export function __resetDbForTesting() {
 }
 
 /**
- * Default permissions for "member" role
- * These are the base permissions that all members have by default
+ * Permission catalog for the project.
+ * These are persisted in the `permission` table via scripts/seed-permissions.ts
  */
-const DEFAULT_MEMBER_PERMISSIONS = [
-  "project:read",
-  "project:create",
-  "user:read",
-  "member:read",
+export const PERMISSION_KEYS = [
+  "tenant:manage",
+  "user:manage",
+  "form:create",
+  "form:edit",
+  "form:publish",
+  "form:map",
+  "submission:create",
+  "submission:view",
+  "submission:export",
 ] as const;
 
-/**
- * Permissions that are restricted for admin role
- * Only owner can perform these actions
- */
-const ADMIN_RESTRICTED_PERMISSIONS = [
-  "organization:delete",
-  "organization:transfer",
-] as const;
+export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 /**
  * Role hierarchy levels
  * Higher number = more permissions
  */
 const ROLE_HIERARCHY = {
-  owner: 3,
-  admin: 2,
-  member: 1,
+  OWNER: 4,
+  ADMIN: 3,
+  MANAGER: 2,
+  AGENT: 1,
 } as const;
 
-type SystemRole = keyof typeof ROLE_HIERARCHY;
+export type SystemRole = keyof typeof ROLE_HIERARCHY;
+
+const ROLE_PERMISSIONS: Record<SystemRole, PermissionKey[]> = {
+  OWNER: [...PERMISSION_KEYS],
+  ADMIN: [
+    "tenant:manage",
+    "user:manage",
+    "form:create",
+    "form:edit",
+    "form:publish",
+    "form:map",
+    "submission:create",
+    "submission:view",
+    "submission:export",
+  ],
+  MANAGER: [
+    "form:create",
+    "form:edit",
+    "form:publish",
+    "form:map",
+    "submission:create",
+    "submission:view",
+    "submission:export",
+  ],
+  AGENT: ["submission:create", "submission:view"],
+};
 
 /**
  * Get default member permissions
@@ -79,10 +101,8 @@ type SystemRole = keyof typeof ROLE_HIERARCHY;
  * 
  * @returns Array of permission names
  */
-async function getDefaultMemberPermissions(): Promise<string[]> {
-  // Return hardcoded list of default member permissions
-  // These should match the permissions seeded in the database
-  return [...DEFAULT_MEMBER_PERMISSIONS];
+async function getDefaultPermissionsForRole(role: SystemRole): Promise<string[]> {
+  return [...(ROLE_PERMISSIONS[role] || [])];
 }
 
 /**
@@ -117,18 +137,17 @@ export async function hasPermission(
     return false; // User is not a member of this organization
   }
 
-  const membershipRole = membership[0].role as SystemRole;
+  const membershipRole = (membership[0].role || "AGENT") as SystemRole;
 
   // 2. Owner has all permissions
-  if (membershipRole === "owner") {
+  if (membershipRole === "OWNER") {
     return true;
   }
 
-  // 3. Admin has most permissions, except some critical ones
-  if (membershipRole === "admin") {
-    return !ADMIN_RESTRICTED_PERMISSIONS.includes(
-      permissionName as (typeof ADMIN_RESTRICTED_PERMISSIONS)[number]
-    );
+  // 3. System role permissions
+  const systemPermissions = await getDefaultPermissionsForRole(membershipRole);
+  if (systemPermissions.includes(permissionName as PermissionKey)) {
+    return true;
   }
 
   // 4. Get custom roles assigned to the user
@@ -144,13 +163,7 @@ export async function hasPermission(
 
   const roleIds = userRoles.map((ur) => ur.roleId);
 
-  // 5. If member without custom roles, check default member permissions
-  if (membershipRole === "member" && roleIds.length === 0) {
-    const memberPermissions = await getDefaultMemberPermissions();
-    return memberPermissions.includes(permissionName);
-  }
-
-  // 6. Check permissions from custom roles
+  // 5. Check permissions from custom roles (additive)
   if (roleIds.length > 0) {
     const hasPerm = await db
       .select()
@@ -167,15 +180,6 @@ export async function hasPermission(
       .limit(1);
 
     if (hasPerm.length > 0) {
-      return true;
-    }
-  }
-
-  // 7. Also check default member permissions even if user has custom roles
-  // (custom roles are additive, not replacing)
-  if (membershipRole === "member") {
-    const memberPermissions = await getDefaultMemberPermissions();
-    if (memberPermissions.includes(permissionName)) {
       return true;
     }
   }
@@ -198,16 +202,16 @@ export async function requirePermission(
 ): Promise<void> {
   const hasPerm = await hasPermission(userId, orgId, permissionName);
   if (!hasPerm) {
-    throw new Error(`Permission denied: ${permissionName}`);
+    throw new Error(`Permissão negada: ${permissionName}`);
   }
 }
 
 /**
  * Check if a user has a specific role in an organization
- * 
+ *
  * @param userId - User ID
  * @param orgId - Organization ID
- * @param roleName - Role name (owner, admin, member)
+ * @param roleName - Role name (OWNER, ADMIN, MANAGER, AGENT)
  * @returns true if user has the role, false otherwise
  */
 export async function hasRole(
@@ -215,7 +219,8 @@ export async function hasRole(
   orgId: string,
   roleName: SystemRole
 ): Promise<boolean> {
-  const membership = await dbClient
+  const db = await getDb();
+  const membership = await db
     .select()
     .from(organizationMembership)
     .where(
@@ -280,8 +285,8 @@ export async function hasMinimumRole(
     return false;
   }
 
-  const userRole = membership[0].role as SystemRole;
-  const userRoleLevel = ROLE_HIERARCHY[userRole] || 0;
+  const userRole = (membership[0].role || "AGENT") as SystemRole;
+  const userRoleLevel = ROLE_HIERARCHY[userRole as SystemRole] || 0;
   const minimumLevel = ROLE_HIERARCHY[minimumRole];
 
   return userRoleLevel >= minimumLevel;

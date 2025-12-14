@@ -7,6 +7,8 @@ import {
   jsonb,
   unique,
   foreignKey,
+  doublePrecision,
+  integer,
 } from "drizzle-orm/pg-core";
 
 // IMPORTANT! ID fields should ALWAYS use UUID types, EXCEPT the BetterAuth tables.
@@ -132,7 +134,8 @@ export const organizationMembership = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    role: text("role").notNull().default("member"), // owner | admin | member | custom
+    // Domain roles for this project: OWNER | ADMIN | MANAGER | AGENT
+    role: text("role").notNull().default("AGENT"),
     status: text("status").notNull().default("active"), // active | pending | suspended
     invitedBy: text("invited_by").references(() => user.id),
     joinedAt: timestamp("joined_at").defaultNow().notNull(),
@@ -198,7 +201,7 @@ export const role = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     name: text("name").notNull(), // Ex: "project_manager", "viewer"
     description: text("description"),
-    isSystem: boolean("is_system").default(false).notNull(), // owner, admin, member são system
+    isSystem: boolean("is_system").default(false).notNull(), // OWNER, ADMIN, MANAGER, AGENT são system para este app
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -284,7 +287,110 @@ export const userRole = pgTable(
       columns: [table.roleId, table.organizationId],
       foreignColumns: [role.id, role.organizationId],
       name: "user_role_role_org_fk",
-      onDelete: "cascade",
     }),
+  ]
+);
+
+// ============================================
+// Form Builder + PDF Overlay Tables
+// ============================================
+
+export const formTemplate = pgTable(
+  "form_template",
+  {
+    id: text("id").primaryKey(), // UUID
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("draft"), // draft | published | archived
+    schemaJson: jsonb("schema_json").notNull(), // Zod-like schema for dynamic form rendering
+    pdfTemplateFileRef: text("pdf_template_file_ref").notNull(), // storage key or /public path
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+    publishedAt: timestamp("published_at"),
+  },
+  (table) => [
+    index("form_template_tenant_idx").on(table.tenantId),
+    unique("form_template_tenant_name_unique").on(table.tenantId, table.name),
+  ]
+);
+
+export const pdfFieldMap = pgTable(
+  "pdf_field_map",
+  {
+    id: text("id").primaryKey(), // UUID
+    templateId: text("template_id")
+      .notNull()
+      .references(() => formTemplate.id, { onDelete: "cascade" }),
+    fieldKey: text("field_key").notNull(),
+    page: integer("page").notNull().default(1),
+    x: doublePrecision("x").notNull(),
+    y: doublePrecision("y").notNull(),
+    fontSize: doublePrecision("font_size").notNull().default(10),
+    fontName: text("font_name").notNull().default("Helvetica"),
+    align: text("align").notNull().default("left"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("pdf_field_map_template_idx").on(table.templateId),
+    unique("pdf_field_map_template_field_unique").on(
+      table.templateId,
+      table.fieldKey
+    ),
+  ]
+);
+
+export const submission = pgTable(
+  "submission",
+  {
+    id: text("id").primaryKey(), // UUID
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    templateId: text("template_id")
+      .notNull()
+      .references(() => formTemplate.id, { onDelete: "cascade" }),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => user.id, { onDelete: "set null" }),
+    dataJson: jsonb("data_json").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("submission_tenant_idx").on(table.tenantId),
+    index("submission_template_idx").on(table.templateId),
+  ]
+);
+
+export const exportLog = pgTable(
+  "export_log",
+  {
+    id: text("id").primaryKey(), // UUID
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    submissionId: text("submission_id")
+      .notNull()
+      .references(() => submission.id, { onDelete: "cascade" }),
+    exportedBy: text("exported_by")
+      .notNull()
+      .references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("export_log_tenant_idx").on(table.tenantId),
+    index("export_log_submission_idx").on(table.submissionId),
   ]
 );

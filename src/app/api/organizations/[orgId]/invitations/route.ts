@@ -1,7 +1,6 @@
-import { randomBytes, randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes, randomUUID } from "crypto";
 import { z } from "zod";
-
 import { db } from "@/lib/db";
 import { requireOrgAccess } from "@/lib/org-guard";
 import { rateLimit } from "@/lib/rate-limit";
@@ -9,40 +8,41 @@ import { organizationInvitation } from "@/lib/schema";
 
 const invitationSchema = z.object({
   email: z.string().email().trim().toLowerCase(),
-  role: z.enum(["owner", "admin", "member"]).default("member"),
+  role: z.enum(["OWNER", "ADMIN", "MANAGER", "AGENT"]).default("AGENT"),
 });
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { orgId: string } }
+  { params }: { params: Promise<{ orgId: string }> }
 ) {
-  const access = await requireOrgAccess(req, "admin"); // admin+ can invite
+  const { orgId } = await params;
+  const access = await requireOrgAccess(req, "ADMIN"); // admin+ can invite
   if (access instanceof NextResponse) {
     return access;
   }
 
-  // Only owners can invite with owner role
+  // Apenas OWNER pode convidar OWNER
   const body = await req.json();
   const parsed = invitationSchema.safeParse(body);
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid input", details: parsed.error.flatten() },
+      { error: "Entrada inválida", details: parsed.error.flatten() },
       { status: 400 }
     );
   }
 
   const { email, role } = parsed.data;
 
-  if (role === "owner" && access.membership.role !== "owner") {
+  if (role === "OWNER" && access.membership.role !== "OWNER") {
     return NextResponse.json(
-      { error: "Only owners can invite owners" },
+      { error: "Somente OWNER pode convidar outro OWNER" },
       { status: 403 }
     );
   }
 
-  // Rate limit invitations per user per org
-  const rateKey = `invite:create:${access.session.user.id}:${access.orgId}`;
+  // Limita convites por usuário/tenant
+  const rateKey = `invite:create:${access.session.user.id}:${orgId}`;
   const { success, resetAt, remaining } = await rateLimit(
     rateKey,
     20,
@@ -51,7 +51,7 @@ export async function POST(
 
   if (!success) {
     return NextResponse.json(
-      { error: "Rate limit exceeded", resetAt },
+      { error: "Limite de convites excedido", resetAt },
       { status: 429 }
     );
   }

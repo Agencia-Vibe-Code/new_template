@@ -22,20 +22,20 @@ export default function Error({
         <div className="flex justify-center mb-6">
           <AlertCircle className="h-16 w-16 text-destructive" />
         </div>
-        <h1 className="text-2xl font-bold mb-4">Something went wrong</h1>
+        <h1 className="text-2xl font-bold mb-4">Algo deu errado</h1>
         <p className="text-muted-foreground mb-6">
-          An unexpected error occurred. Please try again or contact support if
-          the problem persists.
+          Ocorreu um erro inesperado. Tente novamente ou contate o suporte se o
+          problema persistir.
         </p>
         {error.digest && (
           <p className="text-xs text-muted-foreground mb-4">
-            Error ID: {error.digest}
+            ID do erro: {error.digest}
           </p>
         )}
         <div className="flex gap-4 justify-center">
-          <Button onClick={reset}>Try again</Button>
+          <Button onClick={reset}>Tentar novamente</Button>
           <Button variant="outline" onClick={() => (window.location.href = "/")}>
-            Go home
+            Voltar ao início
           </Button>
         </div>
       </div>

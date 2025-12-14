@@ -4,12 +4,13 @@ import { eq, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { organizationMembership } from "@/lib/schema";
+import { SystemRole } from "./rbac";
 import { resolveTenant } from "./tenant-resolver";
 
 export type OrgAccessResult = {
   orgId: string;
   membership: typeof organizationMembership.$inferSelect;
-  session: Awaited<ReturnType<typeof auth.api.getSession>>;
+  session: NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 };
 
 /**
@@ -17,24 +18,24 @@ export type OrgAccessResult = {
  * Validates that the user is authenticated and has access to the organization.
  *
  * @param req - The Next.js request object
- * @param requiredRole - Optional role requirement (owner, admin, member)
+ * @param requiredRole - Optional role requirement (OWNER, ADMIN, MANAGER, AGENT)
  * @returns Either an error response or the organization access result
  */
 export async function requireOrgAccess(
   req: NextRequest,
-  requiredRole?: "owner" | "admin" | "member"
+  requiredRole?: SystemRole
 ): Promise<NextResponse | OrgAccessResult> {
   const session = await auth.api.getSession({ headers: await headers() });
 
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
   const orgId = await resolveTenant(req);
 
   if (!orgId) {
     return NextResponse.json(
-      { error: "Organization context required" },
+      { error: "Contexto de organização obrigatório" },
       { status: 400 }
     );
   }
@@ -54,21 +55,27 @@ export async function requireOrgAccess(
 
   if (!membership[0]) {
     return NextResponse.json(
-      { error: "Not a member of this organization" },
+      { error: "Usuário não faz parte desta organização" },
       { status: 403 }
     );
   }
 
   // Verificar role se necessário
   if (requiredRole) {
-    const roleHierarchy = { owner: 3, admin: 2, member: 1 };
+    const roleHierarchy: Record<SystemRole, number> = {
+      OWNER: 4,
+      ADMIN: 3,
+      MANAGER: 2,
+      AGENT: 1,
+    };
+    const normalizedRole = (membership[0].role || "AGENT") as SystemRole;
     const userRoleLevel =
-      roleHierarchy[membership[0].role as keyof typeof roleHierarchy] || 0;
+      roleHierarchy[normalizedRole] || 0;
     const requiredLevel = roleHierarchy[requiredRole];
 
     if (userRoleLevel < requiredLevel) {
       return NextResponse.json(
-        { error: "Insufficient permissions" },
+        { error: "Permissões insuficientes" },
         { status: 403 }
       );
     }
@@ -83,4 +90,3 @@ export async function requireOrgAccess(
     session,
   };
 }
-

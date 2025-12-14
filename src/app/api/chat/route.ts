@@ -4,10 +4,10 @@ import { streamText, UIMessage, convertToModelMessages } from "ai";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 
-// Zod schema for message validation
+// Schema de validação das mensagens
 const messagePartSchema = z.object({
   type: z.string(),
-  text: z.string().max(10000, "Message text too long").optional(),
+  text: z.string().max(10000, "Mensagem muito longa").optional(),
 });
 
 const messageSchema = z.object({
@@ -18,25 +18,25 @@ const messageSchema = z.object({
 });
 
 const chatRequestSchema = z.object({
-  messages: z.array(messageSchema).max(100, "Too many messages"),
+  messages: z.array(messageSchema).max(100, "Mensagens demais"),
 });
 
 export async function POST(req: Request) {
-  // Verify user is authenticated
+  // Verifica autenticação
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    return new Response(JSON.stringify({ error: "Não autenticado" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Parse and validate request body
+  // Parse e valida corpo
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+    return new Response(JSON.stringify({ error: "JSON inválido" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return new Response(
       JSON.stringify({
-        error: "Invalid request",
+        error: "Requisição inválida",
         details: parsed.error.flatten().fieldErrors,
       }),
       {
@@ -58,10 +58,10 @@ export async function POST(req: Request) {
 
   const { messages }: { messages: UIMessage[] } = parsed.data as { messages: UIMessage[] };
 
-  // Initialize OpenRouter with API key from environment
+  // Inicializa OpenRouter com API key do ambiente
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: "OpenRouter API key not configured" }), {
+    return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY não configurada" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });

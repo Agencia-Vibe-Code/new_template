@@ -20,7 +20,7 @@ export function UserProfile() {
   const router = useRouter();
 
   if (isPending) {
-    return <div>Loading...</div>;
+    return <div>Carregando...</div>;
   }
 
   if (!session) {
@@ -70,13 +70,13 @@ export function UserProfile() {
         <DropdownMenuItem asChild>
           <Link href="/profile" className="flex items-center">
             <User className="mr-2 h-4 w-4" />
-            Your Profile
+            Seu perfil
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleSignOut} variant="destructive">
           <LogOut className="mr-2 h-4 w-4" />
-          Log out
+          Sair
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

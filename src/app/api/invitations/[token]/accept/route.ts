@@ -1,43 +1,43 @@
-import { randomUUID } from "crypto";
 import { headers } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { and, eq } from "drizzle-orm";
-
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { organizationInvitation, organizationMembership, user } from "@/lib/schema";
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { token: string } }
+  { params }: { params: Promise<{ token: string }> }
 ) {
+  const { token } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
   const [invitation] = await db
     .select()
     .from(organizationInvitation)
-    .where(eq(organizationInvitation.token, params.token))
+    .where(eq(organizationInvitation.token, token))
     .limit(1);
 
   if (!invitation) {
-    return NextResponse.json({ error: "Invitation not found" }, { status: 404 });
+    return NextResponse.json({ error: "Convite não encontrado" }, { status: 404 });
   }
 
   const now = new Date();
 
   if (invitation.expiresAt && invitation.expiresAt <= now) {
     return NextResponse.json(
-      { error: "Invitation expired" },
+      { error: "Convite expirado" },
       { status: 410 }
     );
   }
 
   if (invitation.acceptedAt) {
     return NextResponse.json(
-      { error: "Invitation already accepted" },
+      { error: "Convite já aceito" },
       { status: 400 }
     );
   }
@@ -47,7 +47,7 @@ export async function POST(
 
   if (!sessionEmail || sessionEmail !== invitationEmail) {
     return NextResponse.json(
-      { error: "Invitation email does not match the signed-in user" },
+      { error: "O e-mail do convite não corresponde ao usuário autenticado" },
       { status: 403 }
     );
   }
@@ -82,6 +82,10 @@ export async function POST(
           role: organizationMembership.role,
           status: organizationMembership.status,
         });
+
+      if (!createdMembership) {
+        throw new Error("Falha ao criar membership para o convite");
+      }
 
       membershipRole = createdMembership.role;
     }

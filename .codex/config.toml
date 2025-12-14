@@ -1,9 +1,0 @@
-[projects."/Users/tiagoyokoyama/novo_roteiro"]
-trust_level = "trusted"
-
-[mcp_servers.better-auth]
-url = "https://mcp.chonkie.ai/better-auth/better-auth-builder/mcp"
-
-[mcp_servers.context7]
-url = "https://mcp.context7.com/mcp"
-bearer_token_env_var = "CONTEXT7_API_KEY"
